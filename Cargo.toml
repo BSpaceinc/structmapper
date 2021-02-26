@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "./crates/structmapper",
+  "./crates/structmapper-test",
+  "./crates/structmapper-codegen"
+]
