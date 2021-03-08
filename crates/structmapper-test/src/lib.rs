@@ -1,16 +1,22 @@
-use structmapper_codegen::StructMapper;
-
 #[test]
 fn test_derive() {
-  #[derive(StructMapper)]
+  use structmapper_codegen::StructMapper;
+
   struct From {
-    #[struct_mapper(from_value = "{0}")]
     value: i32,
   }
 
   #[derive(StructMapper)]
+  #[struct_mapper(
+    from_type = "(T1, T2)",
+    self_value = "{0}",
+    fields(
+      value = "{value} * 2"
+    )
+  )]
+  #[struct_mapper(from_type = "From2")]
+  #[struct_mapper(from_type = "From2")]
   struct To {
-    #[struct_mapper(from_value = "{0}")]
     value: i32
   }
 }

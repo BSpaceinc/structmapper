@@ -6,6 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/automapper/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/structmapper-codegen/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/structmapper/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/structmapper-test/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
