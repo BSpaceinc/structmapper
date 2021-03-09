@@ -1,20 +1,32 @@
 use syn::visit_mut::{self, VisitMut};
 use syn::{parse_quote, Expr};
 use proc_macro2::TokenStream;
+use syn::parse::{ParseBuffer, Parse};
 
 struct ReplacePlaceholder(Expr);
 
+#[derive(Debug)]
 enum Token<'a> {
   Lit(&'a str),
-  Placeholder(Placeholder<'a>)
+  Placeholder(Placeholder)
 }
 
-struct Placeholder<'a>(&'a Expr);
+#[derive(Debug)]
+struct Placeholder(Expr);
 
-#[derive(Clone)]
+impl Parse for Placeholder {
+  fn parse(input: &ParseBuffer) -> syn::Result<Self> {
+    let content;
+    let _brace = syn::braced!(content in input);
+    let expr: Expr = content.parse()?;
+    Ok(Self(expr))
+  }
+}
+
+#[derive(Debug, Clone)]
 enum LexerError {
   UnclosedBracket,
-  InvalidMember,
+  InvalidExpression,
 }
 
 struct Lexer<'a> {
@@ -33,15 +45,13 @@ impl<'a> Lexer<'a> {
   fn parse_placeholder(&mut self) -> Result<Placeholder, LexerError> {
     if let Some(end) = self.src.find('}') {
       let (inner, rest) = if end == self.src.len() - 1 {
-        (&self.src, "")
+        (self.src, "")
       } else {
         self.src.split_at(end + 1)
       };
-      let tokens: TokenStream = match syn::parse_str(inner) {
-
-      };
       self.src = rest;
-
+      let parsed: Placeholder = syn::parse_str(inner).map_err(|_| LexerError::InvalidExpression)?;
+      Ok(parsed)
     } else {
       return Err(LexerError::UnclosedBracket)
     }
@@ -92,8 +102,6 @@ impl<'a> Iterator for Lexer<'a> {
 
 #[test]
 fn test_self() {
-  use syn::Expr;
-
-  let expr: Expr = syn::parse_str("{0}").unwrap();
-  panic!("{:?}", expr);
+  let tokens: Vec<_> = Lexer::new("{a.b.c.d}").collect::<Result<Vec<_>, _>>().unwrap();
+  panic!("{:?}", tokens);
 }
