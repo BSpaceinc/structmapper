@@ -4,7 +4,7 @@ use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
 
 mod derive;
-mod placeholder;
+mod value_expr;
 
 use derive::DeriveOpts;
 
