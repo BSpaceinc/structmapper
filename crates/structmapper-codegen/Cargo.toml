@@ -3,6 +3,9 @@ name = "structmapper-codegen"
 version = "0.1.0"
 authors = ["Flux Xu <fluxxu@gmail.com>"]
 edition = "2018"
+description = "A library to help you generate code that mapped one struct to another."
+license = "MIT"
+repository = "https://github.com/BSpaceinc/structmapper.git"
 
 [lib]
 proc-macro = true
