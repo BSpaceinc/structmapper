@@ -4,3 +4,6 @@ members = [
   "./crates/structmapper-test",
   "./crates/structmapper-codegen"
 ]
+
+[patch.crates-io]
+structmapper-codegen = { path = "./crates/structmapper-codegen" }

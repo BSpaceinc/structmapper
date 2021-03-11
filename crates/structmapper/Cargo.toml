@@ -8,4 +8,4 @@ license = "MIT"
 repository = "https://github.com/BSpaceinc/structmapper.git"
 
 [dependencies]
-structmapper-codegen = { path = "../structmapper-codegen" }
+structmapper-codegen = "0.1"
