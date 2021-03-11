@@ -1,19 +1,18 @@
-#[test]
-fn test_derive() {
-  use structmapper::StructMapper;
+# StructMapper
+A library to help you generate code that mapped one struct to another.
 
+# Example
+```rust
+  use structmapper::StructMapper;
   struct From1 {
     value: i32,
   }
-
   struct From2 {
     value: i32,
   }
-
   struct From3 {
     value: i32,
   }
-
   #[derive(StructMapper)]
   #[struct_mapper(from_type = "From1")]
   #[struct_mapper(from_type = "From2")]
@@ -27,40 +26,10 @@ fn test_derive() {
   struct To {
     value: i32
   }
-
   let to = To::from(From1 { value: 1 });
   assert_eq!(to.value, 1);
-
   let to = To::from(From2 { value: 2 });
   assert_eq!(to.value, 2);
-
   let to = To::from((From1 { value: 1 }, From2 { value: 2 }, From3 { value: 3 }));
   assert_eq!(to.value, 1 + 2 + 3);
-}
-
-#[test]
-fn test_field_override() {
-  use structmapper::StructMapper;
-
-  #[allow(unused)]
-  struct From {
-    a: i32,
-    b: i32,
-  }
-
-  #[derive(StructMapper)]
-  #[struct_mapper(
-    from_type = "From",
-    fields(
-      a = "1234"
-    )
-  )]
-  struct To {
-    a: i32,
-    b: i32,
-  }
-
-  let to = To::from(From { a: 1, b: 2 });
-  assert_eq!(to.a, 1234);
-  assert_eq!(to.b, 2);
-}
+```
