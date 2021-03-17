@@ -1,9 +1,9 @@
-use quote::{ToTokens, quote};
-use proc_macro2::{TokenStream, Span};
-use syn::{DeriveInput, Ident, Data, Meta, MetaList, Fields, NestedMeta, Path, Lit, Type};
-use proc_macro_error::{abort, abort_call_site, diagnostic, Level, ResultExt};
 use crate::value_expr::ValueExpr;
+use proc_macro2::{Span, TokenStream};
+use proc_macro_error::{abort, abort_call_site, diagnostic, Level, ResultExt};
+use quote::{quote, ToTokens};
 use syn::spanned::Spanned;
+use syn::{Data, DeriveInput, Fields, Ident, Lit, Meta, MetaList, NestedMeta, Path, Type};
 
 #[derive(Debug)]
 pub struct Derive {
@@ -16,32 +16,33 @@ pub struct Derive {
 impl Derive {
   pub fn from_derive_input(input: &DeriveInput) -> Self {
     let fields: Vec<_> = match input.data {
-      Data::Struct(ref data) => {
-        match data.fields {
-          Fields::Named(ref fields) => {
-            fields.named.iter().map(|field| {
-              StructField {
-                ident: field.ident.clone().unwrap(),
-                ty: field.ty.clone(),
-              }
-            }).collect()
-          }
-          _ => abort!(data.fields, "Only support named fields.")
-        }
-      }
+      Data::Struct(ref data) => match data.fields {
+        Fields::Named(ref fields) => fields
+          .named
+          .iter()
+          .map(|field| StructField {
+            ident: field.ident.clone().unwrap(),
+            ty: field.ty.clone(),
+          })
+          .collect(),
+        _ => abort!(data.fields, "Only support named fields."),
+      },
       _ => {
         abort_call_site!("Only support structs.");
       }
     };
 
-    let from_targets = input.attrs.iter().filter_map(|attr| {
-      let meta = attr.parse_meta().unwrap_or_abort();
-      FromStruct::from_meta(&meta)
-        .map(|v| {
+    let from_targets = input
+      .attrs
+      .iter()
+      .filter_map(|attr| {
+        let meta = attr.parse_meta().unwrap_or_abort();
+        FromStruct::from_meta(&meta).map(|v| {
           v.validate_override_fields(&fields);
           v
         })
-    }).collect();
+      })
+      .collect();
 
     Self {
       ident: input.ident.clone(),
@@ -54,10 +55,10 @@ impl Derive {
 
 impl ToTokens for Derive {
   fn to_tokens(&self, tokens: &mut TokenStream) {
-    let items: Vec<_> = self.from_targets.iter()
-      .map(|v| {
-        v.get_impl_from_tokens(self)
-      })
+    let items: Vec<_> = self
+      .from_targets
+      .iter()
+      .map(|v| v.get_impl_from_tokens(self))
       .collect();
 
     tokens.extend(quote! {
@@ -84,13 +85,9 @@ impl FromStruct {
     match meta {
       // Empty attribute:
       // #[struct_mapper]
-      Meta::Path(_) => {
-        None
-      }
+      Meta::Path(_) => None,
       // #[struct_mapper(...)]
-      Meta::List(ref list) => {
-        Self::from_meta_list(list).into()
-      }
+      Meta::List(ref list) => Self::from_meta_list(list).into(),
       // NameValue:
       // #[struct_mapper = "foo"]
       Meta::NameValue(_) => {
@@ -100,7 +97,11 @@ impl FromStruct {
   }
 
   fn from_meta_list(list: &MetaList) -> Self {
-    let opts: Vec<_> = list.nested.iter().map(FromStructOpts::from_nested_meta).collect();
+    let opts: Vec<_> = list
+      .nested
+      .iter()
+      .map(FromStructOpts::from_nested_meta)
+      .collect();
 
     let mut from_type = None;
     let mut default_base = None;
@@ -111,9 +112,7 @@ impl FromStruct {
         FromStructOpts::FromType(v) => {
           from_type = Some(v);
         }
-        FromStructOpts::DefaultBase(v) => {
-          default_base = Some(v)
-        }
+        FromStructOpts::DefaultBase(v) => default_base = Some(v),
         FromStructOpts::Fields(v) => {
           override_fields = Some(v);
         }
@@ -121,9 +120,7 @@ impl FromStruct {
     }
 
     Self {
-      from_type: from_type.unwrap_or_else(|| {
-        abort!(list, "`from_type` option is missing")
-      }),
+      from_type: from_type.unwrap_or_else(|| abort!(list, "`from_type` option is missing")),
       default_base_tokens: default_base.unwrap_or_else(|| quote!(__from)),
       override_fields,
     }
@@ -131,9 +128,7 @@ impl FromStruct {
 
   fn validate_override_fields(&self, self_fields: &[StructField]) {
     if let Some(ref override_fields) = self.override_fields.as_ref() {
-      let self_field_idents: Vec<_> = self_fields.iter()
-        .map(|i| &i.ident)
-        .collect();
+      let self_field_idents: Vec<_> = self_fields.iter().map(|i| &i.ident).collect();
       for field in &override_fields.fields {
         if !self_field_idents.contains(&&field.ident) {
           abort!(field.ident, format!("Unknown field `{}`", field.ident));
@@ -148,16 +143,18 @@ impl FromStruct {
     let default_base_tokens = &self.default_base_tokens;
     let base_tokens = quote! {__from};
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let assign_items: Vec<_> = input.fields.iter()
+    let assign_items: Vec<_> = input
+      .fields
+      .iter()
       .map(|field| {
         if let Some(ref fields) = self.override_fields {
           if let Some(f) = fields.fields.iter().find(|i| i.ident == field.ident) {
-            return f.get_field_assign_tokens(&base_tokens)
+            return f.get_field_assign_tokens(&base_tokens);
           }
         }
         let field = &field.ident;
         quote! {
-          #field : #default_base_tokens . #field
+          #field : #default_base_tokens . #field . into()
         }
       })
       .collect();
@@ -177,7 +174,7 @@ impl FromStruct {
 enum FromStructOpts {
   FromType(FromType),
   DefaultBase(TokenStream),
-  Fields(FromStructFields)
+  Fields(FromStructFields),
 }
 
 #[derive(Debug, Clone)]
@@ -192,16 +189,20 @@ impl FromType {
       Lit::Str(lit) => {
         let src = lit.value();
         if src.trim_start().starts_with("(") {
-          FromType::Tuple(syn::parse_str(&src)
-            .map_err(|err| diagnostic!(lit, Level::Error, err))
-            .expect_or_abort("Not a tuple type"))
+          FromType::Tuple(
+            syn::parse_str(&src)
+              .map_err(|err| diagnostic!(lit, Level::Error, err))
+              .expect_or_abort("Not a tuple type"),
+          )
         } else {
-          FromType::Path(syn::parse_str(&src)
-            .map_err(|err| diagnostic!(lit, Level::Error, err))
-            .expect_or_abort("Not a type"))
+          FromType::Path(
+            syn::parse_str(&src)
+              .map_err(|err| diagnostic!(lit, Level::Error, err))
+              .expect_or_abort("Not a type"),
+          )
         }
       }
-      _ => abort!(v, "Invalid syntax.")
+      _ => abort!(v, "Invalid syntax."),
     }
   }
 }
@@ -232,23 +233,21 @@ impl FromStructOpts {
             }
           }
           // from_type = ".."
-          Meta::NameValue(ref v) => {
-            match v.path.get_ident() {
-              Some(ident) => {
-                let ident = ident.to_string();
-                match ident.as_str() {
-                  "from_type" => Self::FromType(FromType::from_lit(&v.lit)),
-                  "default_base" => Self::parse_default_base(&v.lit),
-                  _ => {
-                    abort!(v, "Unknown option.")
-                  }
+          Meta::NameValue(ref v) => match v.path.get_ident() {
+            Some(ident) => {
+              let ident = ident.to_string();
+              match ident.as_str() {
+                "from_type" => Self::FromType(FromType::from_lit(&v.lit)),
+                "default_base" => Self::parse_default_base(&v.lit),
+                _ => {
+                  abort!(v, "Unknown option.")
                 }
-              },
-              None => {
-                abort!(v, "Unknown option.")
               }
             }
-          }
+            None => {
+              abort!(v, "Unknown option.")
+            }
+          },
         }
       }
       NestedMeta::Lit(_) => {
@@ -279,11 +278,12 @@ struct FromStructFields {
   span: Span,
 }
 
-
 impl FromStructFields {
   fn from_meta_list(v: &MetaList) -> Self {
     Self {
-      fields: v.nested.iter()
+      fields: v
+        .nested
+        .iter()
         .map(FromStructField::from_nested_meta)
         .collect(),
       span: v.span(),
@@ -311,19 +311,15 @@ impl FromStructField {
             abort!(meta, ABORT_MESSAGE)
           }
           // key = ".."
-          Meta::NameValue(ref v) => {
-            match v.path.get_ident() {
-              Some(ident) => {
-                Self {
-                  ident: ident.clone(),
-                  lit: v.lit.clone(),
-                }
-              },
-              None => {
-                abort!(v, ABORT_MESSAGE)
-              }
+          Meta::NameValue(ref v) => match v.path.get_ident() {
+            Some(ident) => Self {
+              ident: ident.clone(),
+              lit: v.lit.clone(),
+            },
+            None => {
+              abort!(v, ABORT_MESSAGE)
             }
-          }
+          },
         }
       }
       NestedMeta::Lit(_) => {
@@ -344,7 +340,8 @@ impl FromStructField {
     let expr = ValueExpr::from_lit(&src)
       .map_err(|err| diagnostic!(self.lit, Level::Error, err))
       .expect_or_abort("Value expression parse");
-    let value_tokens = expr.into_tokens(base_tokens)
+    let value_tokens = expr
+      .into_tokens(base_tokens)
       .map_err(|err| diagnostic!(self.lit, Level::Error, err))
       .expect_or_abort("Value expression transform");
 
