@@ -3,7 +3,10 @@ use proc_macro2::{Span, TokenStream};
 use proc_macro_error::{abort, abort_call_site, diagnostic, Level, ResultExt};
 use quote::{quote, ToTokens};
 use syn::spanned::Spanned;
-use syn::{Data, DeriveInput, Fields, Ident, Lit, Meta, MetaList, NestedMeta, Path, Type};
+use syn::{
+  Data, DeriveInput, Fields, Ident, Lit, Meta, MetaList, NestedMeta, Path, Type, TypeReference,
+  TypeTuple,
+};
 
 #[derive(Debug)]
 pub struct Derive {
@@ -180,7 +183,8 @@ enum FromStructOpts {
 #[derive(Debug, Clone)]
 enum FromType {
   Path(Path),
-  Tuple(Type),
+  Tuple(TypeTuple),
+  Reference(TypeReference),
 }
 
 impl FromType {
@@ -188,18 +192,27 @@ impl FromType {
     match v {
       Lit::Str(lit) => {
         let src = lit.value();
-        if src.trim_start().starts_with("(") {
-          FromType::Tuple(
-            syn::parse_str(&src)
-              .map_err(|err| diagnostic!(lit, Level::Error, err))
-              .expect_or_abort("Not a tuple type"),
-          )
-        } else {
-          FromType::Path(
-            syn::parse_str(&src)
-              .map_err(|err| diagnostic!(lit, Level::Error, err))
-              .expect_or_abort("Not a type"),
-          )
+        let ty: Type = syn::parse_str(&src)
+          .map_err(|err| diagnostic!(lit, Level::Error, err))
+          .expect_or_abort("Not a type");
+        // if src.trim_start().starts_with("(") {
+        //   FromType::Tuple(
+        //     syn::parse_str(&src)
+        //       .map_err(|err| diagnostic!(lit, Level::Error, err))
+        //       .expect_or_abort("Not a tuple type"),
+        //   )
+        // } else {
+        //   FromType::Path(
+        //     syn::parse_str(&src)
+        //       .map_err(|err| diagnostic!(lit, Level::Error, err))
+        //       .expect_or_abort("Not a type"),
+        //   )
+        // }
+        match ty {
+          Type::Path(path) => FromType::Path(path.path),
+          Type::Reference(v) => FromType::Reference(v),
+          Type::Tuple(v) => FromType::Tuple(v),
+          _ => abort!(v, "Unsupported type."),
         }
       }
       _ => abort!(v, "Invalid syntax."),
@@ -212,6 +225,7 @@ impl ToTokens for FromType {
     match *self {
       FromType::Path(ref v) => v.to_tokens(tokens),
       FromType::Tuple(ref v) => v.to_tokens(tokens),
+      FromType::Reference(ref v) => v.to_tokens(tokens),
     }
   }
 }
