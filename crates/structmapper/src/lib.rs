@@ -41,4 +41,10 @@
 //!   let to = To::from((From1 { value: 1 }, From2 { value: 2 }, From3 { value: 3 }));
 //!   assert_eq!(to.value, 1 + 2 + 3);
 //! ```
+
 pub use structmapper_codegen::StructMapper;
+
+/// A value-to-value conversion that consumes the input value. The opposite of From.
+pub trait MapInto<T> {
+  fn map_into(self) -> T;
+}

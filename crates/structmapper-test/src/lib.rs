@@ -1,5 +1,5 @@
 #[test]
-fn test_derive() {
+fn test_from() {
   use structmapper::StructMapper;
 
   struct From1 {
@@ -82,4 +82,43 @@ fn test_field_override() {
   let to = To::from(From { a: 1, b: 2 });
   assert_eq!(to.a, 1234);
   assert_eq!(to.b, 2);
+}
+
+#[test]
+fn test_into() {
+  use structmapper::StructMapper;
+
+  struct Into1 {
+    base: i32,
+    value: i32,
+  }
+
+  struct Into2 {
+    base: i32,
+    value: i32,
+  }
+
+  struct Into3 {
+    value: i32,
+  }
+
+  #[derive(StructMapper)]
+  #[struct_mapper(into_type = "Into1")]
+  #[struct_mapper(into_type = "Into2", fields(base = "Default::default()"))]
+  #[struct_mapper(into_type = "Into3", ignore(base))]
+  struct From {
+    base: i32,
+    value: i32,
+  }
+
+  let to: Into1 = From { base: 1111, value: 1 }.into();
+  assert_eq!(to.base, 1111);
+  assert_eq!(to.value, 1);
+
+  let to: Into2 = From { base: 123, value: 1 }.into();
+  assert_eq!(to.base, 0);
+  assert_eq!(to.value, 1);
+
+  let to: Into3 = From { base: 0, value: 2 }.into();
+  assert_eq!(to.value, 2);
 }

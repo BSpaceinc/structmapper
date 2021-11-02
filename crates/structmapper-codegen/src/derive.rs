@@ -13,7 +13,7 @@ pub struct Derive {
   ident: syn::Ident,
   generics: syn::Generics,
   fields: Vec<StructField>,
-  from_targets: Vec<FromStruct>,
+  from_targets: Vec<Mapping>,
 }
 
 impl Derive {
@@ -40,7 +40,7 @@ impl Derive {
       .iter()
       .filter_map(|attr| {
         let meta = attr.parse_meta().unwrap_or_abort();
-        FromStruct::from_meta(&meta).map(|v| {
+        Mapping::from_meta(&meta).map(|v| {
           v.validate_override_fields(&fields);
           v
         })
@@ -61,7 +61,7 @@ impl ToTokens for Derive {
     let items: Vec<_> = self
       .from_targets
       .iter()
-      .map(|v| v.get_impl_from_tokens(self))
+      .map(|v| v.get_impl_tokens(self))
       .collect();
 
     tokens.extend(quote! {
@@ -77,13 +77,14 @@ struct StructField {
 }
 
 #[derive(Debug)]
-struct FromStruct {
-  from_type: FromType,
-  default_base_tokens: TokenStream,
-  override_fields: Option<FromStructFields>,
+struct Mapping {
+  impl_trait: ImplTrait,
+  default_base: Option<TokenStream>,
+  override_fields: Option<MappingAssignFields>,
+  ignore_fields: Option<MappingIgnoreFields>,
 }
 
-impl FromStruct {
+impl Mapping {
   fn from_meta(meta: &Meta) -> Option<Self> {
     match meta {
       // Empty attribute:
@@ -103,29 +104,54 @@ impl FromStruct {
     let opts: Vec<_> = list
       .nested
       .iter()
-      .map(FromStructOpts::from_nested_meta)
+      .map(MappingOpts::from_nested_meta)
       .collect();
 
     let mut from_type = None;
+    let mut into_type = None;
     let mut default_base = None;
     let mut override_fields = None;
+    let mut ignore_fields = None;
 
     for opt in opts {
       match opt {
-        FromStructOpts::FromType(v) => {
+        MappingOpts::FromType(v) => {
           from_type = Some(v);
         }
-        FromStructOpts::DefaultBase(v) => default_base = Some(v),
-        FromStructOpts::Fields(v) => {
+        MappingOpts::IntoType(v) => {
+          into_type = Some(v)
+        }
+        MappingOpts::DefaultBase(v) => default_base = Some(v),
+        MappingOpts::AssignFields(v) => {
           override_fields = Some(v);
+        }
+        MappingOpts::IgnoreFields(v) => {
+          ignore_fields = Some(v)
         }
       }
     }
 
+    if (from_type.is_none() && into_type.is_none()) || (from_type.is_some() && into_type.is_some()) {
+      abort!(list, format!("Either `from_type` or `into_type` needs to be specified"));
+    }
+
+    let impl_trait = match (from_type, into_type) {
+      (Some(_), Some(_)) | (None, None) => {
+        abort!(list, format!("Either `from_type` or `into_type` needs to be specified"));
+      }
+      (Some(from_type), None) => {
+        ImplTrait::From(from_type)
+      }
+      (None, Some(into_type)) => {
+        ImplTrait::Into(into_type)
+      }
+    };
+
     Self {
-      from_type: from_type.unwrap_or_else(|| abort!(list, "`from_type` option is missing")),
-      default_base_tokens: default_base.unwrap_or_else(|| quote!(__from)),
+      impl_trait,
+      default_base,
       override_fields,
+      ignore_fields,
     }
   }
 
@@ -140,60 +166,110 @@ impl FromStruct {
     }
   }
 
-  fn get_impl_from_tokens(&self, input: &Derive) -> TokenStream {
+  fn get_impl_tokens(&self, input: &Derive) -> TokenStream {
     let self_ident = &input.ident;
-    let from_type = &self.from_type;
-    let default_base_tokens = &self.default_base_tokens;
-    let base_tokens = quote! {__from};
+    let default_base = self.default_base.as_ref();
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let assign_items: Vec<_> = input
-      .fields
-      .iter()
-      .map(|field| {
-        if let Some(ref fields) = self.override_fields {
-          if let Some(f) = fields.fields.iter().find(|i| i.ident == field.ident) {
-            return f.get_field_assign_tokens(&base_tokens);
-          }
-        }
-        let field = &field.ident;
+
+    match self.impl_trait {
+      ImplTrait::From(ref from_type) => {
+        let base_tokens = quote! {__from};
+        let default_base = default_base.unwrap_or_else(|| &base_tokens);
+        let assign_items: Vec<_> = input
+          .fields
+          .iter()
+          .filter_map(|field| {
+            if self.ignore_fields.as_ref().map(|f| f.idents.contains(&field.ident)).unwrap_or_default() {
+              return None
+            }
+
+            if let Some(ref fields) = self.override_fields {
+              if let Some(f) = fields.fields.iter().find(|i| i.ident == field.ident) {
+                return Some(f.get_field_assign_tokens(&base_tokens));
+              }
+            }
+            let field = &field.ident;
+            Some(quote! {
+              #field : #default_base . #field . into()
+            })
+          })
+          .collect();
+
         quote! {
-          #field : #default_base_tokens . #field . into()
-        }
-      })
-      .collect();
-    quote! {
-      impl #impl_generics std::convert::From<#from_type> for #self_ident #ty_generics #where_clause {
-        fn from(__from: #from_type) -> Self {
-          Self {
-            #(#assign_items),*
+          impl #impl_generics std::convert::From<#from_type> for #self_ident #ty_generics #where_clause {
+            fn from(__from: #from_type) -> Self {
+              Self {
+                #(#assign_items),*
+              }
+            }
           }
         }
-      }
+      },
+      ImplTrait::Into(ref into_type) => {
+        let base_tokens = quote! {self};
+        let default_base = default_base.unwrap_or_else(|| &base_tokens);
+        let assign_items: Vec<_> = input
+          .fields
+          .iter()
+          .filter_map(|field| {
+            if self.ignore_fields.as_ref().map(|f| f.idents.contains(&field.ident)).unwrap_or_default() {
+              return None
+            }
+
+            if let Some(ref fields) = self.override_fields {
+              if let Some(f) = fields.fields.iter().find(|i| i.ident == field.ident) {
+                return Some(f.get_field_assign_tokens(&base_tokens));
+              }
+            }
+            let field = &field.ident;
+            Some(quote! {
+              #field : #default_base . #field . into()
+            })
+          })
+          .collect();
+        quote! {
+          impl #impl_generics std::convert::Into<#into_type> for #self_ident #ty_generics #where_clause {
+            fn into(self) -> #into_type {
+              #into_type {
+                #(#assign_items),*
+              }
+            }
+          }
+        }
+      },
     }
   }
 }
 
 #[derive(Debug)]
-enum FromStructOpts {
-  FromType(FromType),
+enum ImplTrait {
+  From(TargetType),
+  Into(TargetType),
+}
+
+#[derive(Debug)]
+enum MappingOpts {
+  FromType(TargetType),
+  IntoType(TargetType),
   DefaultBase(TokenStream),
-  Fields(FromStructFields),
+  AssignFields(MappingAssignFields),
+  IgnoreFields(MappingIgnoreFields),
 }
 
 #[derive(Debug, Clone)]
-enum FromType {
+enum TargetType {
   Path(Path),
   Tuple(TypeTuple),
   Reference(TypeReference),
 }
 
-impl FromType {
+impl TargetType {
   fn from_lit(v: &Lit) -> Self {
     match v {
       Lit::Str(lit) => {
         let src = lit.value();
         let ty: Type = syn::parse_str(&src)
-          .map_err(|err| diagnostic!(lit, Level::Error, err))
+          .map_err(|err| diagnostic!(lit, Level::Error, "{}: {}", err, src))
           .expect_or_abort("Not a type");
         // if src.trim_start().starts_with("(") {
         //   FromType::Tuple(
@@ -209,9 +285,9 @@ impl FromType {
         //   )
         // }
         match ty {
-          Type::Path(path) => FromType::Path(path.path),
-          Type::Reference(v) => FromType::Reference(v),
-          Type::Tuple(v) => FromType::Tuple(v),
+          Type::Path(path) => TargetType::Path(path.path),
+          Type::Reference(v) => TargetType::Reference(v),
+          Type::Tuple(v) => TargetType::Tuple(v),
           _ => abort!(v, "Unsupported type."),
         }
       }
@@ -220,17 +296,17 @@ impl FromType {
   }
 }
 
-impl ToTokens for FromType {
+impl ToTokens for TargetType {
   fn to_tokens(&self, tokens: &mut TokenStream) {
     match *self {
-      FromType::Path(ref v) => v.to_tokens(tokens),
-      FromType::Tuple(ref v) => v.to_tokens(tokens),
-      FromType::Reference(ref v) => v.to_tokens(tokens),
+      TargetType::Path(ref v) => v.to_tokens(tokens),
+      TargetType::Tuple(ref v) => v.to_tokens(tokens),
+      TargetType::Reference(ref v) => v.to_tokens(tokens),
     }
   }
 }
 
-impl FromStructOpts {
+impl MappingOpts {
   fn from_nested_meta(meta: &NestedMeta) -> Self {
     match meta {
       NestedMeta::Meta(ref meta) => {
@@ -240,8 +316,14 @@ impl FromStructOpts {
           }
           // fields(..)
           Meta::List(ref v) => {
-            if let Some(true) = v.path.get_ident().map(|ident| ident == "fields") {
-              Self::Fields(FromStructFields::from_meta_list(v))
+            if let Some(ident) = v.path.get_ident() {
+              if ident == "fields" {
+                Self::AssignFields(MappingAssignFields::from_meta_list(v))
+              } else if ident == "ignore" {
+                Self::IgnoreFields(MappingIgnoreFields::from_meta_list(v))
+              } else {
+                abort!(v, "Unknown option: {}", ident)
+              }
             } else {
               abort!(v, "Unknown option.")
             }
@@ -251,7 +333,8 @@ impl FromStructOpts {
             Some(ident) => {
               let ident = ident.to_string();
               match ident.as_str() {
-                "from_type" => Self::FromType(FromType::from_lit(&v.lit)),
+                "from_type" => Self::FromType(TargetType::from_lit(&v.lit)),
+                "into_type" => Self::IntoType(TargetType::from_lit(&v.lit)),
                 "default_base" => Self::parse_default_base(&v.lit),
                 _ => {
                   abort!(v, "Unknown option.")
@@ -287,18 +370,18 @@ impl FromStructOpts {
 }
 
 #[derive(Debug)]
-struct FromStructFields {
-  fields: Vec<FromStructField>,
+struct MappingAssignFields {
+  fields: Vec<MappingAssignField>,
   span: Span,
 }
 
-impl FromStructFields {
+impl MappingAssignFields {
   fn from_meta_list(v: &MetaList) -> Self {
     Self {
       fields: v
         .nested
         .iter()
-        .map(FromStructField::from_nested_meta)
+        .map(MappingAssignField::from_nested_meta)
         .collect(),
       span: v.span(),
     }
@@ -306,12 +389,12 @@ impl FromStructFields {
 }
 
 #[derive(Debug)]
-struct FromStructField {
+struct MappingAssignField {
   ident: Ident,
   lit: Lit,
 }
 
-impl FromStructField {
+impl MappingAssignField {
   fn from_nested_meta(meta: &NestedMeta) -> Self {
     const ABORT_MESSAGE: &str = r#"Expected: key = "<expr>""#;
 
@@ -343,7 +426,7 @@ impl FromStructField {
   }
 }
 
-impl FromStructField {
+impl MappingAssignField {
   // `field : value`
   fn get_field_assign_tokens(&self, base_tokens: &TokenStream) -> TokenStream {
     let src = if let Lit::Str(ref lit) = self.lit {
@@ -362,6 +445,35 @@ impl FromStructField {
     let ident = &self.ident;
     quote! {
       #ident : #value_tokens
+    }
+  }
+}
+
+#[derive(Debug)]
+struct MappingIgnoreFields {
+  idents: Vec<Ident>,
+  span: Span,
+}
+
+impl MappingIgnoreFields {
+  fn from_meta_list(list: &MetaList) -> Self {
+    let idents = list.nested.iter().map(|item| {
+      match item {
+        NestedMeta::Meta(Meta::Path(ref path)) => {
+          if let Some(ident) = path.get_ident() {
+            ident.clone()
+          } else {
+            abort!(item, "Expected a identifier");
+          }
+        }
+        _ => {
+          abort!(item, "Expected a identifier");
+        }
+      }
+    }).collect();
+    Self {
+      idents,
+      span: list.span().clone(),
     }
   }
 }
