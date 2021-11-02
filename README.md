@@ -4,6 +4,8 @@ A library to help you generate code that mapped one struct to another.
 
 # Example
 
+## Generate `From<T>`
+
 ```rust
 use structmapper::StructMapper;
 
@@ -46,4 +48,44 @@ let to = To::from((
 ));
 assert_eq!(to.base, 42);
 assert_eq!(to.value, 1 + 2 + 3);
+```
+
+## Generate `Into<T>`
+
+```rust
+use structmapper::StructMapper;
+
+struct Into1 {
+base: i32,
+value: i32,
+}
+
+struct Into2 {
+base: i32,
+value: i32,
+}
+
+struct Into3 {
+value: i32,
+}
+
+#[derive(StructMapper)]
+#[struct_mapper(into_type = "Into1")]
+#[struct_mapper(into_type = "Into2", fields(base = "Default::default()"))]
+#[struct_mapper(into_type = "Into3", ignore(base))]
+struct From {
+base: i32,
+value: i32,
+}
+
+let to: Into1 = From { base: 1111, value: 1 }.into();
+assert_eq!(to.base, 1111);
+assert_eq!(to.value, 1);
+
+let to: Into2 = From { base: 123, value: 1 }.into();
+assert_eq!(to.base, 0);
+assert_eq!(to.value, 1);
+
+let to: Into3 = From { base: 0, value: 2 }.into();
+assert_eq!(to.value, 2);
 ```
