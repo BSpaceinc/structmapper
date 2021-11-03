@@ -188,9 +188,14 @@ impl Mapping {
                 return Some(f.get_field_assign_tokens(&base_tokens));
               }
             }
+
+            let ty = &field.ty;
             let field = &field.ident;
+            let value = expand_value(ty, quote! {
+              #default_base . #field
+            });
             Some(quote! {
-              #field : #default_base . #field . into()
+              #field : #value
             })
           })
           .collect();
@@ -221,9 +226,13 @@ impl Mapping {
                 return Some(f.get_field_assign_tokens(&base_tokens));
               }
             }
+            let ty = &field.ty;
             let field = &field.ident;
+            let value = expand_value(ty, quote! {
+              #default_base . #field
+            });
             Some(quote! {
-              #field : #default_base . #field . into()
+              #field : #value
             })
           })
           .collect();
@@ -475,5 +484,37 @@ impl MappingIgnoreFields {
       idents,
       span: list.span().clone(),
     }
+  }
+}
+
+fn expand_value(ty: &syn::Type, tokens: TokenStream) -> TokenStream {
+  match ty {
+    Type::Path(syn::TypePath {
+      qself: None,
+      path: syn::Path {
+        leading_colon: None,
+        ref segments,
+        ..
+      }
+    }) => {
+      if let Some(syn::PathSegment {
+        ident,
+        arguments: syn::PathArguments::AngleBracketed(_)
+      }) = segments.first() { {
+        if ident == "Vec" {
+          return quote! {
+            #tokens .into_iter().map(Into::into).collect()
+          }
+        } else if ident == "Option" {
+          return quote! {
+            #tokens .map(Into::into)
+          }
+        }
+      }}
+    },
+    _ => {}
+  }
+  quote! {
+    #tokens .into()
   }
 }

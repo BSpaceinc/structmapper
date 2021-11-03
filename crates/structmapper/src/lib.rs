@@ -43,8 +43,3 @@
 //! ```
 
 pub use structmapper_codegen::StructMapper;
-
-/// A value-to-value conversion that consumes the input value. The opposite of From.
-pub trait MapInto<T> {
-  fn map_into(self) -> T;
-}
