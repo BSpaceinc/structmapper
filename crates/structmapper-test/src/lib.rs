@@ -111,14 +111,63 @@ fn test_into() {
     value: i32,
   }
 
-  let to: Into1 = From { base: 1111, value: 1 }.into();
+  let to: Into1 = From {
+    base: 1111,
+    value: 1,
+  }
+  .into();
   assert_eq!(to.base, 1111);
   assert_eq!(to.value, 1);
 
-  let to: Into2 = From { base: 123, value: 1 }.into();
+  let to: Into2 = From {
+    base: 123,
+    value: 1,
+  }
+  .into();
   assert_eq!(to.base, 0);
   assert_eq!(to.value, 1);
 
   let to: Into3 = From { base: 0, value: 2 }.into();
   assert_eq!(to.value, 2);
+}
+
+#[test]
+fn test_nested() {
+  use structmapper::StructMapper;
+
+  struct Inner {
+    value: i32,
+  }
+
+  struct Outer {
+    value: i32,
+    inner: Inner,
+    list: Vec<Inner>,
+  }
+
+  #[derive(StructMapper)]
+  #[struct_mapper(into_type = "Inner")]
+  struct FromInner {
+    value: i32,
+  }
+
+  #[derive(StructMapper)]
+  #[struct_mapper(into_type = "Outer")]
+  struct FromOuter {
+    value: i32,
+    inner: FromInner,
+    list: Vec<FromInner>,
+  }
+
+  let to: Outer = FromOuter {
+    value: 1,
+    inner: FromInner { value: 2 },
+    list: vec![
+      FromInner { value: 3 },
+    ]
+  }
+  .into();
+  assert_eq!(to.value, 1);
+  assert_eq!(to.inner.value, 2);
+  assert_eq!(to.list[0].value, 3);
 }
