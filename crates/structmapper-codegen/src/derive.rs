@@ -13,7 +13,7 @@ pub struct Derive {
   ident: syn::Ident,
   generics: syn::Generics,
   fields: Vec<StructField>,
-  from_targets: Vec<Mapping>,
+  mappings: Vec<Mapping>,
 }
 
 impl Derive {
@@ -35,13 +35,15 @@ impl Derive {
       }
     };
 
-    let from_targets = input
+    let mappings = input
       .attrs
       .iter()
       .filter_map(|attr| {
         let meta = attr.parse_meta().unwrap_or_abort();
         Mapping::from_meta(&meta).map(|v| {
-          v.validate_override_fields(&fields);
+          if let ImplTrait::From(_) = v.impl_trait {
+            v.validate_override_fields(&fields);
+          }
           v
         })
       })
@@ -51,7 +53,7 @@ impl Derive {
       ident: input.ident.clone(),
       generics: input.generics.clone(),
       fields,
-      from_targets,
+      mappings,
     }
   }
 }
@@ -59,7 +61,7 @@ impl Derive {
 impl ToTokens for Derive {
   fn to_tokens(&self, tokens: &mut TokenStream) {
     let items: Vec<_> = self
-      .from_targets
+      .mappings
       .iter()
       .map(|v| v.get_impl_tokens(self))
       .collect();
@@ -211,8 +213,19 @@ impl Mapping {
         }
       },
       ImplTrait::Into(ref into_type) => {
+        use std::collections::BTreeMap;
         let base_tokens = quote! {self};
         let default_base = default_base.unwrap_or_else(|| &base_tokens);
+        let mut override_map: BTreeMap<_, _> = if let Some(ref value) = self.override_fields {
+          value.fields
+            .iter()
+            .map(|f| {
+              (f.ident.clone(), f)
+            })
+            .collect()
+        } else {
+          Default::default()
+        };
         let assign_items: Vec<_> = input
           .fields
           .iter()
@@ -221,10 +234,8 @@ impl Mapping {
               return None
             }
 
-            if let Some(ref fields) = self.override_fields {
-              if let Some(f) = fields.fields.iter().find(|i| i.ident == field.ident) {
-                return Some(f.get_field_assign_tokens(&base_tokens));
-              }
+            if let Some(f) = override_map.remove(&&field.ident) {
+              return Some(f.get_field_assign_tokens(&base_tokens));
             }
             let ty = &field.ty;
             let field = &field.ident;
@@ -236,6 +247,9 @@ impl Mapping {
             })
           })
           .collect();
+        let assign_items: Vec<_> = override_map.values().map(|f| {
+          f.get_field_assign_tokens(&base_tokens)
+        }).chain(assign_items.into_iter()).collect();
         quote! {
           impl #impl_generics std::convert::Into<#into_type> for #self_ident #ty_generics #where_clause {
             fn into(self) -> #into_type {

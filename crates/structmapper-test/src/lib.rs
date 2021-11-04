@@ -139,6 +139,12 @@ fn test_nested() {
     value: i32,
   }
 
+  impl Inner {
+    fn new(value: i32) -> Self {
+      Inner { value }
+    }
+  }
+
   struct Outer {
     value: i32,
     inner: Inner,
@@ -147,6 +153,10 @@ fn test_nested() {
 
   #[derive(StructMapper)]
   #[struct_mapper(into_type = "Inner")]
+  #[struct_mapper(into_type = "Outer", fields(
+    inner = "Inner::new({value} * 2)",
+    list = "vec![]"
+  ))]
   struct FromInner {
     value: i32,
   }
@@ -170,4 +180,8 @@ fn test_nested() {
   assert_eq!(to.value, 1);
   assert_eq!(to.inner.value, 2);
   assert_eq!(to.list[0].value, 3);
+
+  let to: Outer = FromInner { value: 4 }.into();
+  assert_eq!(to.value, 4);
+  assert_eq!(to.inner.value, 8);
 }
