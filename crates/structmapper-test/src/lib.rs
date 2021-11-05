@@ -185,3 +185,28 @@ fn test_nested() {
   assert_eq!(to.value, 4);
   assert_eq!(to.inner.value, 8);
 }
+
+#[test]
+fn test_enum() {
+  use structmapper::StructMapper;
+
+  #[derive(Debug, PartialEq, Eq)]
+  enum Enum1 {
+    A,
+    B,
+  }
+
+  #[derive(Debug, PartialEq, Eq, StructMapper)]
+  #[struct_mapper(from_type = "Enum1")]
+  #[struct_mapper(into_type = "Enum1")]
+  enum Enum2 {
+    A,
+    B,
+  }
+
+  let v: Enum1 = Enum2::A.into();
+  assert_eq!(v, Enum1::A); 
+
+  let v: Enum2 = Enum2::from(Enum1::B);
+  assert_eq!(v, Enum2::B); 
+}

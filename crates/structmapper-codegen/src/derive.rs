@@ -8,18 +8,20 @@ use syn::{
   TypeTuple,
 };
 
+const ATTR_NAME: &str = "struct_mapper";
+
 #[derive(Debug)]
 pub struct Derive {
   ident: syn::Ident,
   generics: syn::Generics,
-  fields: Vec<StructField>,
+  data: TypeData,
   mappings: Vec<Mapping>,
 }
 
 impl Derive {
   pub fn from_derive_input(input: &DeriveInput) -> Self {
-    let fields: Vec<_> = match input.data {
-      Data::Struct(ref data) => match data.fields {
+    let data = match input.data {
+      Data::Struct(ref data) => TypeData::Struct(match data.fields {
         Fields::Named(ref fields) => fields
           .named
           .iter()
@@ -29,9 +31,18 @@ impl Derive {
           })
           .collect(),
         _ => abort!(data.fields, "Only support named fields."),
-      },
+      }),
+      Data::Enum(ref data) => {
+        TypeData::Enum(data.variants.iter().map(|v| {
+          if let syn::Fields::Unit = v.fields {
+            v.ident.clone()
+          } else {
+            abort!(v, "Only support unit variant.")
+          }
+        }).collect())
+      }
       _ => {
-        abort_call_site!("Only support structs.");
+        abort_call_site!("Only support struct and enum.");
       }
     };
 
@@ -42,7 +53,9 @@ impl Derive {
         let meta = attr.parse_meta().unwrap_or_abort();
         Mapping::from_meta(&meta).map(|v| {
           if let ImplTrait::From(_) = v.impl_trait {
-            v.validate_override_fields(&fields);
+            if let TypeData::Struct(ref fields) = data {
+              v.validate_override_fields(fields);
+            }
           }
           v
         })
@@ -52,7 +65,7 @@ impl Derive {
     Self {
       ident: input.ident.clone(),
       generics: input.generics.clone(),
-      fields,
+      data,
       mappings,
     }
   }
@@ -70,6 +83,12 @@ impl ToTokens for Derive {
       #(#items)*
     });
   }
+}
+
+#[derive(Debug)]
+enum TypeData {
+  Struct(Vec<StructField>),
+  Enum(Vec<syn::Ident>),
 }
 
 #[derive(Debug)]
@@ -93,12 +112,15 @@ impl Mapping {
       // #[struct_mapper]
       Meta::Path(_) => None,
       // #[struct_mapper(...)]
-      Meta::List(ref list) => Self::from_meta_list(list).into(),
+      Meta::List(ref list) => {
+        if !list.path.get_ident().map(|v| v == ATTR_NAME).unwrap_or_default() {
+          return None
+        }
+        Self::from_meta_list(list).into()
+      },
       // NameValue:
       // #[struct_mapper = "foo"]
-      Meta::NameValue(_) => {
-        abort!(meta, "Invalid syntax.")
-      }
+      Meta::NameValue(_) => None,
     }
   }
 
@@ -169,6 +191,17 @@ impl Mapping {
   }
 
   fn get_impl_tokens(&self, input: &Derive) -> TokenStream {
+    match input.data {
+      TypeData::Struct(ref fields) => {
+        self.get_struct_tokens(input, fields)
+      },
+      TypeData::Enum(ref variants) => {
+        self.get_enum_tokens(input, variants)
+      },
+    }
+  }
+
+  fn get_struct_tokens(&self, input: &Derive, fields: &[StructField]) -> TokenStream {
     let self_ident = &input.ident;
     let default_base = self.default_base.as_ref();
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
@@ -177,8 +210,7 @@ impl Mapping {
       ImplTrait::From(ref from_type) => {
         let base_tokens = quote! {__from};
         let default_base = default_base.unwrap_or_else(|| &base_tokens);
-        let assign_items: Vec<_> = input
-          .fields
+        let assign_items: Vec<_> = fields
           .iter()
           .filter_map(|field| {
             if self.ignore_fields.as_ref().map(|f| f.idents.contains(&field.ident)).unwrap_or_default() {
@@ -226,8 +258,7 @@ impl Mapping {
         } else {
           Default::default()
         };
-        let assign_items: Vec<_> = input
-          .fields
+        let assign_items: Vec<_> = fields
           .iter()
           .filter_map(|field| {
             if self.ignore_fields.as_ref().map(|f| f.idents.contains(&field.ident)).unwrap_or_default() {
@@ -260,7 +291,62 @@ impl Mapping {
           }
         }
       },
-    }
+    }    
+  }
+
+  fn get_enum_tokens(&self, input: &Derive, variants: &[Ident]) -> TokenStream {
+    let self_ident = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    match self.impl_trait {
+      ImplTrait::From(ref from_type) => {
+        let variant_arms: Vec<_> = variants
+          .iter()
+          .filter_map(|ident| {
+            if self.ignore_fields.as_ref().map(|f| f.idents.contains(ident)).unwrap_or_default() {
+              return None
+            }
+
+            return Some(quote! {
+              #from_type :: #ident => Self :: #ident
+            });
+          })
+          .collect();
+
+        quote! {
+          impl #impl_generics std::convert::From<#from_type> for #self_ident #ty_generics #where_clause {
+            fn from(__from: #from_type) -> Self {
+              match __from {
+                #(#variant_arms),*
+              }
+            }
+          }
+        }
+      },
+      ImplTrait::Into(ref into_type) => {
+        let variant_arms: Vec<_> = variants
+          .iter()
+          .filter_map(|ident| {
+            if self.ignore_fields.as_ref().map(|f| f.idents.contains(ident)).unwrap_or_default() {
+              return None
+            }
+
+            Some(quote! {
+              Self :: #ident => #into_type :: #ident
+            })
+          })
+          .collect();
+        quote! {
+          impl #impl_generics std::convert::Into<#into_type> for #self_ident #ty_generics #where_clause {
+            fn into(self) -> #into_type {
+              match self {
+                #(#variant_arms),*
+              }
+            }
+          }
+        }
+      },
+    }    
   }
 }
 
