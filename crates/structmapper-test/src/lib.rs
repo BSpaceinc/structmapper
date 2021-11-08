@@ -262,9 +262,7 @@ fn try_into() {
   )]
   #[struct_mapper(
     try_into("T3", error = "std::num::TryFromIntError"),
-    fields(
-      value = "{value}.try_into()?"
-    )
+    try_fields(value)
   )]
   struct T2 {
     value: i32,

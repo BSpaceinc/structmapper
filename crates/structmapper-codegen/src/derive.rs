@@ -102,7 +102,8 @@ struct Mapping {
   impl_trait: ImplTrait,
   default_base: Option<TokenStream>,
   override_fields: Option<MappingAssignFields>,
-  ignore_fields: Option<MappingIgnoreFields>,
+  ignore_fields: Option<MappingFieldSet>,
+  try_fields: Option<MappingFieldSet>,
 }
 
 impl Mapping {
@@ -138,6 +139,7 @@ impl Mapping {
     let mut default_base = None;
     let mut override_fields = None;
     let mut ignore_fields = None;
+    let mut try_fields = None;
 
     for opt in opts {
       match opt {
@@ -160,6 +162,9 @@ impl Mapping {
         MappingOpts::TryInto(v) => {
           try_into = Some(v)
         },
+        MappingOpts::TryFields(v) => {
+          try_fields = Some(v)
+        },
       }
     }
 
@@ -180,6 +185,7 @@ impl Mapping {
       default_base,
       override_fields,
       ignore_fields,
+      try_fields,
     }
   }
 
@@ -258,6 +264,12 @@ impl Mapping {
               return None
             }
 
+            let expand = if self.try_fields.as_ref().map(|f| f.idents.contains(&field.ident)).unwrap_or_default() {
+              try_expand_value
+            } else {
+              expand_value
+            };
+
             if let Some(ref fields) = self.override_fields {
               if let Some(f) = fields.fields.iter().find(|i| i.ident == field.ident) {
                 return Some(f.get_field_assign_tokens(&base_tokens));
@@ -266,7 +278,7 @@ impl Mapping {
 
             let ty = &field.ty;
             let field = &field.ident;
-            let value = expand_value(ty, quote! {
+            let value = expand(ty, quote! {
               #default_base . #field
             });
             Some(quote! {
@@ -357,9 +369,16 @@ impl Mapping {
             if let Some(f) = override_map.remove(&&field.ident) {
               return Some(f.get_field_assign_tokens(&base_tokens));
             }
+
+            let expand = if self.try_fields.as_ref().map(|f| f.idents.contains(&field.ident)).unwrap_or_default() {
+              try_expand_value
+            } else {
+              expand_value
+            };
+
             let ty = &field.ty;
             let field = &field.ident;
-            let value = expand_value(ty, quote! {
+            let value = expand(ty, quote! {
               #default_base . #field
             });
             Some(quote! {
@@ -459,7 +478,8 @@ enum MappingOpts {
   TryInto(TryMeta),
   DefaultBase(TokenStream),
   AssignFields(MappingAssignFields),
-  IgnoreFields(MappingIgnoreFields),
+  IgnoreFields(MappingFieldSet),
+  TryFields(MappingFieldSet),
 }
 
 impl MappingOpts {
@@ -478,11 +498,15 @@ impl MappingOpts {
               if ident == "fields" {
                 Self::AssignFields(MappingAssignFields::from_meta_list(v))
               } else if ident == "ignore" {
-                Self::IgnoreFields(MappingIgnoreFields::from_meta_list(v))
+                Self::IgnoreFields(MappingFieldSet::from_meta_list(v))
               } else if ident == "try_from" {
                 Self::TryFrom(TryMeta::from_meta_list(v))
               } else if ident == "try_into" {
                 Self::TryInto(TryMeta::from_meta_list(v))
+              } else if ident == "try_fields" {
+                Self::TryFields(MappingFieldSet::from_meta_list(v))
+              } else if ident == "ignore" {
+                Self::IgnoreFields(MappingFieldSet::from_meta_list(v))
               } else {
                 abort!(v, "Unknown option: {}", ident)
               }
@@ -705,12 +729,12 @@ impl MappingAssignField {
 }
 
 #[derive(Debug)]
-struct MappingIgnoreFields {
+struct MappingFieldSet {
   idents: Vec<Ident>,
   span: Span,
 }
 
-impl MappingIgnoreFields {
+impl MappingFieldSet {
   fn from_meta_list(list: &MetaList) -> Self {
     let idents = list.nested.iter().map(|item| {
       match item {
@@ -762,5 +786,37 @@ fn expand_value(ty: &syn::Type, tokens: TokenStream) -> TokenStream {
   }
   quote! {
     #tokens .into()
+  }
+}
+
+fn try_expand_value(ty: &syn::Type, tokens: TokenStream) -> TokenStream {
+  match ty {
+    Type::Path(syn::TypePath {
+      qself: None,
+      path: syn::Path {
+        leading_colon: None,
+        ref segments,
+        ..
+      }
+    }) => {
+      if let Some(syn::PathSegment {
+        ident,
+        arguments: syn::PathArguments::AngleBracketed(_)
+      }) = segments.first() { {
+        if ident == "Vec" {
+          return quote! {
+            #tokens .into_iter().map(TryInto::try_into).collect::<Result<Vec<_>>>()?
+          }
+        } else if ident == "Option" {
+          return quote! {
+            #tokens .map(TryInto::try_into).transpose()?
+          }
+        }
+      }}
+    },
+    _ => {}
+  }
+  quote! {
+    std::convert::TryInto::try_into(#tokens)?
   }
 }
