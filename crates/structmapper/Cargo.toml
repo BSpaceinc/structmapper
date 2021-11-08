@@ -9,4 +9,4 @@ repository = "https://github.com/BSpaceinc/structmapper.git"
 readme = "../../README.md"
 
 [dependencies]
-structmapper-codegen = "0.4.0"
+structmapper-codegen = "0.4.1"
