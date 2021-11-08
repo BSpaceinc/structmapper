@@ -210,3 +210,74 @@ fn test_enum() {
   let v: Enum2 = Enum2::from(Enum1::B);
   assert_eq!(v, Enum2::B); 
 }
+
+#[test]
+fn try_from() {
+  use std::convert::TryFrom;
+  use structmapper::StructMapper;
+  struct T1 {
+    _base: i32,
+    value: i32,
+  }
+
+  #[derive(StructMapper)]
+  #[struct_mapper(
+    try_from("T1", error = "()"),
+    ignore(_base)
+  )]
+  #[struct_mapper(
+    try_from("T3", error = "std::num::ParseIntError"),
+    fields(
+      value = "{value}.parse()?"
+    )
+  )]
+  struct T2 {
+    value: i32,
+  }
+
+  struct T3 {
+    value: String,
+  }
+
+  let v = T2::try_from(T1 { _base: 0, value: 1 }).unwrap();
+  assert_eq!(v.value, 1);
+
+  let v = T2::try_from(T3 { value: "123456".to_string() }).unwrap();
+  assert_eq!(v.value, 123456);
+}
+
+#[test]
+fn try_into() {
+  use std::convert::TryInto;
+  use structmapper::StructMapper;
+  struct T1 {
+    base: i32,
+    value: i32,
+  }
+
+  #[derive(StructMapper)]
+  #[struct_mapper(
+    try_into("T1", error = "()"),
+    fields(base = "1234")
+  )]
+  #[struct_mapper(
+    try_into("T3", error = "std::num::TryFromIntError"),
+    fields(
+      value = "{value}.try_into()?"
+    )
+  )]
+  struct T2 {
+    value: i32,
+  }
+
+  struct T3 {
+    value: i8,
+  }
+
+  let v: T1 = T2 { value: 8 }.try_into().unwrap();
+  assert_eq!(v.base, 1234);
+  assert_eq!(v.value, 8);
+
+  let v: T3 = T2 { value: 8 }.try_into().unwrap();
+  assert_eq!(v.value, 8);
+}

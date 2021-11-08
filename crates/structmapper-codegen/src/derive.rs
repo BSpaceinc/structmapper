@@ -133,6 +133,8 @@ impl Mapping {
 
     let mut from_type = None;
     let mut into_type = None;
+    let mut try_from = None;
+    let mut try_into = None;
     let mut default_base = None;
     let mut override_fields = None;
     let mut ignore_fields = None;
@@ -152,24 +154,26 @@ impl Mapping {
         MappingOpts::IgnoreFields(v) => {
           ignore_fields = Some(v)
         }
+        MappingOpts::TryFrom(v) => {
+          try_from = Some(v)
+        },
+        MappingOpts::TryInto(v) => {
+          try_into = Some(v)
+        },
       }
     }
 
-    if (from_type.is_none() && into_type.is_none()) || (from_type.is_some() && into_type.is_some()) {
-      abort!(list, format!("Either `from_type` or `into_type` needs to be specified"));
+    let impl_count = [from_type.is_some(), into_type.is_some(), try_from.is_some(), try_into.is_some()].iter().filter(|v| **v).count();
+    if impl_count == 0 || impl_count > 1 {
+      abort!(list, format!("One of `from_type`/`into_type`/`try_from`/`try_into` needs to be specified"));
     }
 
-    let impl_trait = match (from_type, into_type) {
-      (Some(_), Some(_)) | (None, None) => {
-        abort!(list, format!("Either `from_type` or `into_type` needs to be specified"));
-      }
-      (Some(from_type), None) => {
-        ImplTrait::From(from_type)
-      }
-      (None, Some(into_type)) => {
-        ImplTrait::Into(into_type)
-      }
-    };
+    let impl_trait = from_type
+      .map(ImplTrait::From)
+      .or(into_type.map(ImplTrait::Into))
+      .or(try_from.map(ImplTrait::TryFrom))
+      .or(try_into.map(ImplTrait::TryInto))
+      .unwrap();
 
     Self {
       impl_trait,
@@ -244,6 +248,44 @@ impl Mapping {
           }
         }
       },
+      ImplTrait::TryFrom(TryMeta { ref ty, ref error }) => {
+        let base_tokens = quote! {__from};
+        let default_base = default_base.unwrap_or_else(|| &base_tokens);
+        let assign_items: Vec<_> = fields
+          .iter()
+          .filter_map(|field| {
+            if self.ignore_fields.as_ref().map(|f| f.idents.contains(&field.ident)).unwrap_or_default() {
+              return None
+            }
+
+            if let Some(ref fields) = self.override_fields {
+              if let Some(f) = fields.fields.iter().find(|i| i.ident == field.ident) {
+                return Some(f.get_field_assign_tokens(&base_tokens));
+              }
+            }
+
+            let ty = &field.ty;
+            let field = &field.ident;
+            let value = expand_value(ty, quote! {
+              #default_base . #field
+            });
+            Some(quote! {
+              #field : #value
+            })
+          })
+          .collect();
+
+        quote! {
+          impl #impl_generics std::convert::TryFrom<#ty> for #self_ident #ty_generics #where_clause {
+            type Error = #error;
+            fn try_from(__from: #ty) -> Result<Self, Self::Error> {
+              Ok(Self {
+                #(#assign_items),*
+              })
+            }
+          }
+        }
+      },
       ImplTrait::Into(ref into_type) => {
         use std::collections::BTreeMap;
         let base_tokens = quote! {self};
@@ -291,6 +333,54 @@ impl Mapping {
           }
         }
       },
+      ImplTrait::TryInto(TryMeta { ref ty, ref error}) => {
+        use std::collections::BTreeMap;
+        let base_tokens = quote! {self};
+        let default_base = default_base.unwrap_or_else(|| &base_tokens);
+        let mut override_map: BTreeMap<_, _> = if let Some(ref value) = self.override_fields {
+          value.fields
+            .iter()
+            .map(|f| {
+              (f.ident.clone(), f)
+            })
+            .collect()
+        } else {
+          Default::default()
+        };
+        let assign_items: Vec<_> = fields
+          .iter()
+          .filter_map(|field| {
+            if self.ignore_fields.as_ref().map(|f| f.idents.contains(&field.ident)).unwrap_or_default() {
+              return None
+            }
+
+            if let Some(f) = override_map.remove(&&field.ident) {
+              return Some(f.get_field_assign_tokens(&base_tokens));
+            }
+            let ty = &field.ty;
+            let field = &field.ident;
+            let value = expand_value(ty, quote! {
+              #default_base . #field
+            });
+            Some(quote! {
+              #field : #value
+            })
+          })
+          .collect();
+        let assign_items: Vec<_> = override_map.values().map(|f| {
+          f.get_field_assign_tokens(&base_tokens)
+        }).chain(assign_items.into_iter()).collect();
+        quote! {
+          impl #impl_generics std::convert::TryInto<#ty> for #self_ident #ty_generics #where_clause {
+            type Error = #error;
+            fn try_into(self) -> Result<#ty, Self::Error> {
+              Ok(#ty {
+                #(#assign_items),*
+              })
+            }
+          }
+        }
+      },
     }    
   }
 
@@ -299,6 +389,9 @@ impl Mapping {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     match self.impl_trait {
+      ImplTrait::TryFrom(_) | ImplTrait::TryInto(_) => {
+        abort!(input, format!("Cannot specify `try_from`/`try_into` for enums."));
+      },
       ImplTrait::From(ref from_type) => {
         let variant_arms: Vec<_> = variants
           .iter()
@@ -352,67 +445,21 @@ impl Mapping {
 
 #[derive(Debug)]
 enum ImplTrait {
-  From(TargetType),
-  Into(TargetType),
+  From(TypeInLit),
+  TryFrom(TryMeta),
+  Into(TypeInLit),
+  TryInto(TryMeta)
 }
 
 #[derive(Debug)]
 enum MappingOpts {
-  FromType(TargetType),
-  IntoType(TargetType),
+  FromType(TypeInLit),
+  TryFrom(TryMeta),
+  IntoType(TypeInLit),
+  TryInto(TryMeta),
   DefaultBase(TokenStream),
   AssignFields(MappingAssignFields),
   IgnoreFields(MappingIgnoreFields),
-}
-
-#[derive(Debug, Clone)]
-enum TargetType {
-  Path(Path),
-  Tuple(TypeTuple),
-  Reference(TypeReference),
-}
-
-impl TargetType {
-  fn from_lit(v: &Lit) -> Self {
-    match v {
-      Lit::Str(lit) => {
-        let src = lit.value();
-        let ty: Type = syn::parse_str(&src)
-          .map_err(|err| diagnostic!(lit, Level::Error, "{}: {}", err, src))
-          .expect_or_abort("Not a type");
-        // if src.trim_start().starts_with("(") {
-        //   FromType::Tuple(
-        //     syn::parse_str(&src)
-        //       .map_err(|err| diagnostic!(lit, Level::Error, err))
-        //       .expect_or_abort("Not a tuple type"),
-        //   )
-        // } else {
-        //   FromType::Path(
-        //     syn::parse_str(&src)
-        //       .map_err(|err| diagnostic!(lit, Level::Error, err))
-        //       .expect_or_abort("Not a type"),
-        //   )
-        // }
-        match ty {
-          Type::Path(path) => TargetType::Path(path.path),
-          Type::Reference(v) => TargetType::Reference(v),
-          Type::Tuple(v) => TargetType::Tuple(v),
-          _ => abort!(v, "Unsupported type."),
-        }
-      }
-      _ => abort!(v, "Invalid syntax."),
-    }
-  }
-}
-
-impl ToTokens for TargetType {
-  fn to_tokens(&self, tokens: &mut TokenStream) {
-    match *self {
-      TargetType::Path(ref v) => v.to_tokens(tokens),
-      TargetType::Tuple(ref v) => v.to_tokens(tokens),
-      TargetType::Reference(ref v) => v.to_tokens(tokens),
-    }
-  }
 }
 
 impl MappingOpts {
@@ -424,12 +471,18 @@ impl MappingOpts {
             abort!(meta, "Invalid syntax.")
           }
           // fields(..)
+          // try_from(..)
+          // try_into(..)
           Meta::List(ref v) => {
             if let Some(ident) = v.path.get_ident() {
               if ident == "fields" {
                 Self::AssignFields(MappingAssignFields::from_meta_list(v))
               } else if ident == "ignore" {
                 Self::IgnoreFields(MappingIgnoreFields::from_meta_list(v))
+              } else if ident == "try_from" {
+                Self::TryFrom(TryMeta::from_meta_list(v))
+              } else if ident == "try_into" {
+                Self::TryInto(TryMeta::from_meta_list(v))
               } else {
                 abort!(v, "Unknown option: {}", ident)
               }
@@ -442,8 +495,8 @@ impl MappingOpts {
             Some(ident) => {
               let ident = ident.to_string();
               match ident.as_str() {
-                "from_type" => Self::FromType(TargetType::from_lit(&v.lit)),
-                "into_type" => Self::IntoType(TargetType::from_lit(&v.lit)),
+                "from_type" => Self::FromType(TypeInLit::from_lit(&v.lit)),
+                "into_type" => Self::IntoType(TypeInLit::from_lit(&v.lit)),
                 "default_base" => Self::parse_default_base(&v.lit),
                 _ => {
                   abort!(v, "Unknown option.")
@@ -474,6 +527,99 @@ impl MappingOpts {
       Self::DefaultBase(tokens)
     } else {
       abort!(v, "Invalid `self_value` expression.")
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+enum TypeInLit {
+  Path(Path),
+  Tuple(TypeTuple),
+  Reference(TypeReference),
+}
+
+impl TypeInLit {
+  fn from_lit(v: &Lit) -> Self {
+    match v {
+      Lit::Str(lit) => {
+        let src = lit.value();
+        let ty: Type = syn::parse_str(&src)
+          .map_err(|err| diagnostic!(lit, Level::Error, "{}: {}", err, src))
+          .expect_or_abort("Not a type");
+        // if src.trim_start().starts_with("(") {
+        //   FromType::Tuple(
+        //     syn::parse_str(&src)
+        //       .map_err(|err| diagnostic!(lit, Level::Error, err))
+        //       .expect_or_abort("Not a tuple type"),
+        //   )
+        // } else {
+        //   FromType::Path(
+        //     syn::parse_str(&src)
+        //       .map_err(|err| diagnostic!(lit, Level::Error, err))
+        //       .expect_or_abort("Not a type"),
+        //   )
+        // }
+        match ty {
+          Type::Path(path) => TypeInLit::Path(path.path),
+          Type::Reference(v) => TypeInLit::Reference(v),
+          Type::Tuple(v) => TypeInLit::Tuple(v),
+          _ => abort!(v, "Unsupported type."),
+        }
+      }
+      _ => abort!(v, "Invalid syntax."),
+    }
+  }
+}
+
+impl ToTokens for TypeInLit {
+  fn to_tokens(&self, tokens: &mut TokenStream) {
+    match *self {
+      TypeInLit::Path(ref v) => v.to_tokens(tokens),
+      TypeInLit::Tuple(ref v) => v.to_tokens(tokens),
+      TypeInLit::Reference(ref v) => v.to_tokens(tokens),
+    }
+  }
+}
+
+#[derive(Debug)]
+struct TryMeta {
+  ty: TypeInLit,
+  error: TypeInLit,
+}
+
+impl TryMeta {
+  // try_from("Type", error = "Error")
+  // try_from(type = "Type", error = "Error")
+  fn from_meta_list(v: &MetaList) -> Self {
+    if v.nested.len() == 2 {
+      let ty = match v.nested[0] {
+        NestedMeta::Meta(syn::Meta::NameValue(syn::MetaNameValue { ref path, ref lit, ..})) => {
+          if path.get_ident().map(|v| v == "type").unwrap_or_default() {
+            TypeInLit::from_lit(lit)
+          } else {
+            abort!(path, "Invalid syntax: expected `type = \"Type\"`")
+          }
+        },
+        NestedMeta::Lit(ref lit) => TypeInLit::from_lit(lit),
+        _ => abort!(v.nested[0], "Invalid syntax.")
+      };
+      let error = match v.nested[1] {
+        NestedMeta::Meta(syn::Meta::NameValue(syn::MetaNameValue { ref path, ref lit, ..})) => {
+          if path.get_ident().map(|v| v == "error").unwrap_or_default() {
+            TypeInLit::from_lit(lit)
+          } else {
+            abort!(path, "Invalid syntax: expected `error = \"Type\"`")
+          }
+        },
+        NestedMeta::Lit(ref lit) => TypeInLit::from_lit(lit),
+        _ => abort!(v.nested[0], "Invalid syntax.")
+      };
+      Self {
+        ty,
+        error,
+      }
+    } else {
+      abort!(v, "Invalid syntax.")
     }
   }
 }
