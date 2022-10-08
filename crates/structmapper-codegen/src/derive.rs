@@ -50,6 +50,10 @@ impl Derive {
       .attrs
       .iter()
       .filter_map(|attr| {
+        if !attr.path.get_ident().map(|v| v == ATTR_NAME).unwrap_or_default() {
+          return None
+        }
+
         let meta = attr.parse_meta().unwrap_or_abort();
         Mapping::from_meta(&meta).map(|v| {
           if let ImplTrait::From(_) = v.impl_trait {
@@ -114,9 +118,6 @@ impl Mapping {
       Meta::Path(_) => None,
       // #[struct_mapper(...)]
       Meta::List(ref list) => {
-        if !list.path.get_ident().map(|v| v == ATTR_NAME).unwrap_or_default() {
-          return None
-        }
         Self::from_meta_list(list).into()
       },
       // NameValue:
@@ -651,7 +652,7 @@ impl TryMeta {
 #[derive(Debug)]
 struct MappingAssignFields {
   fields: Vec<MappingAssignField>,
-  span: Span,
+  _span: Span,
 }
 
 impl MappingAssignFields {
@@ -662,7 +663,7 @@ impl MappingAssignFields {
         .iter()
         .map(MappingAssignField::from_nested_meta)
         .collect(),
-      span: v.span(),
+      _span: v.span(),
     }
   }
 }
@@ -731,7 +732,7 @@ impl MappingAssignField {
 #[derive(Debug)]
 struct MappingFieldSet {
   idents: Vec<Ident>,
-  span: Span,
+  _span: Span,
 }
 
 impl MappingFieldSet {
@@ -752,7 +753,7 @@ impl MappingFieldSet {
     }).collect();
     Self {
       idents,
-      span: list.span().clone(),
+      _span: list.span().clone(),
     }
   }
 }
